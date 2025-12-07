@@ -1,11 +1,15 @@
 #include "Window.h"
 
-#include <QMouseEvent>
+#include <QDateTime>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QOpenGLFunctions>
 #include <QOpenGLShaderProgram>
-#include <QVBoxLayout>
 #include <QScreen>
+#include <QVBoxLayout>
 
 #include <array>
 
@@ -17,35 +21,85 @@
 
 namespace
 {
-
-constexpr std::array<GLfloat, 21u> vertices = {
-	0.0f, 0.707f, 1.f, 0.f, 0.f, 0.0f, 0.0f,
-	-0.5f, -0.5f, 0.f, 1.f, 0.f, 0.5f, 1.0f,
-	0.5f, -0.5f, 0.f, 0.f, 1.f, 1.0f, 0.0f,
+struct vert {
+	GLfloat position[2];
 };
-constexpr std::array<GLuint, 3u> indices = {0, 1, 2};
+
+constexpr std::array<vert, 4u> vertices = {
+	vert{
+		.position = {-1.0f, -1.0f},
+	},
+	vert{
+		.position = {1.0f, 1.0f},
+	},
+	vert{
+		.position = {-1.0f, 1.0f},
+	},
+	vert{
+		.position = {1.0f, -1.0f},
+	},
+};
+constexpr std::array<GLuint, 6u> indices = {0, 1, 2, 0, 3, 1};
 
 }// namespace
 
-Window::Window() noexcept
+void Window::setupUI()
 {
-	const auto formatFPS = [](const auto value) {
-		return QString("FPS: %1").arg(QString::number(value));
-	};
+	auto * mainLayout = new QVBoxLayout();
 
-	auto fps = new QLabel(formatFPS(0), this);
-	fps->setStyleSheet("QLabel { color : white; }");
+	auto * fractalGroup = new QGroupBox("Параметры фрактала");
+	auto * fractalLayout = new QFormLayout();
 
-	auto layout = new QVBoxLayout();
-	layout->addWidget(fps, 1);
+	iterationsSlider_ = new QSlider(Qt::Horizontal);
+	iterationsSlider_->setRange(10, 2000);
+	iterationsSlider_->setValue(info.maxIterations);
+	iterationsSlider_->setTickInterval(50);
+	iterationsSlider_->setTickPosition(QSlider::TicksBelow);
+	iterationsLabel_ = new QLabel(QString::number(info.maxIterations));
+	fractalLayout->addRow("Итерации:", iterationsSlider_);
+	fractalLayout->addRow("", iterationsLabel_);
 
-	setLayout(layout);
+	fractalGroup->setLayout(fractalLayout);
+	fractalGroup->setMaximumWidth(250);
 
-	timer_.start();
+	auto * fpsGroup = new QGroupBox("Производительность");
+	auto * fpsLayout = new QVBoxLayout();
+	auto * fpsLabel = new QLabel("FPS: 0", this);
+	fpsLabel->setStyleSheet("QLabel { color : white; font-weight: bold; }");
+	fpsLayout->addWidget(fpsLabel);
+	fpsGroup->setLayout(fpsLayout);
+	fpsGroup->setMaximumWidth(250);
+
+	connect(iterationsSlider_, &QSlider::valueChanged, this, &Window::onSliderChanged);
 
 	connect(this, &Window::updateUI, [=] {
-		fps->setText(formatFPS(ui_.fps));
+		fpsLabel->setText(QString("FPS: %1").arg(ui_.fps));
 	});
+
+	mainLayout->addWidget(fractalGroup);
+	mainLayout->addWidget(fpsGroup);
+	mainLayout->addStretch(1);
+
+	setLayout(mainLayout);
+}
+
+void Window::onSliderChanged()
+{
+	info.maxIterations = iterationsSlider_->value();
+	iterationsLabel_->setText(QString::number(info.maxIterations));
+
+	update();
+}
+
+Window::Window() noexcept
+{
+	info.resolution = {640.0f, 480.0f};
+	info.offset = {0.0f, 0.0f};
+	info.zoom = 1.0f;
+	info.maxIterations = 100;
+
+	setupUI();
+	timer_.start();
 }
 
 Window::~Window()
@@ -53,7 +107,6 @@ Window::~Window()
 	{
 		// Free resources with context bounded.
 		const auto guard = bindContext();
-		texture_.reset();
 		program_.reset();
 	}
 }
@@ -62,9 +115,9 @@ void Window::onInit()
 {
 	// Configure shaders
 	program_ = std::make_unique<QOpenGLShaderProgram>(this);
-	program_->addShaderFromSourceFile(QOpenGLShader::Vertex, ":/Shaders/diffuse.vs");
+	program_->addShaderFromSourceFile(QOpenGLShader::Vertex, ":/Shaders/vertex.glsl");
 	program_->addShaderFromSourceFile(QOpenGLShader::Fragment,
-									  ":/Shaders/diffuse.fs");
+									  ":/Shaders/fragment.glsl");
 	program_->link();
 
 	// Create VAO object
@@ -75,33 +128,25 @@ void Window::onInit()
 	vbo_.create();
 	vbo_.bind();
 	vbo_.setUsagePattern(QOpenGLBuffer::StaticDraw);
-	vbo_.allocate(vertices.data(), static_cast<int>(vertices.size() * sizeof(GLfloat)));
+	vbo_.allocate(vertices.data(), static_cast<int>(sizeof(vertices)));
 
 	// Create IBO
 	ibo_.create();
 	ibo_.bind();
 	ibo_.setUsagePattern(QOpenGLBuffer::StaticDraw);
-	ibo_.allocate(indices.data(), static_cast<int>(indices.size() * sizeof(GLuint)));
-
-	texture_ = std::make_unique<QOpenGLTexture>(QImage(":/Textures/voronoi.png"));
-	texture_->setMinMagFilters(QOpenGLTexture::Linear, QOpenGLTexture::Linear);
-	texture_->setWrapMode(QOpenGLTexture::WrapMode::Repeat);
+	ibo_.allocate(indices.data(), static_cast<int>(sizeof(indices)));
 
 	// Bind attributes
 	program_->bind();
 
 	program_->enableAttributeArray(0);
-	program_->setAttributeBuffer(0, GL_FLOAT, 0, 2, static_cast<int>(7 * sizeof(GLfloat)));
+	program_->setAttributeBuffer(0, GL_FLOAT, static_cast<int>(offsetof(vert, position)), 2, static_cast<int>(sizeof(vert)));
 
-	program_->enableAttributeArray(1);
-	program_->setAttributeBuffer(1, GL_FLOAT, static_cast<int>(2 * sizeof(GLfloat)), 3,
-								 static_cast<int>(7 * sizeof(GLfloat)));
-
-	program_->enableAttributeArray(2);
-	program_->setAttributeBuffer(2, GL_FLOAT, static_cast<int>(5 * sizeof(GLfloat)), 2,
-								 static_cast<int>(7 * sizeof(GLfloat)));
-
-	mvpUniform_ = program_->uniformLocation("mvp");
+	resolutionUniform_ = program_->uniformLocation("resolution");
+	offsetUniform_ = program_->uniformLocation("offset");
+	zoomUniform_ = program_->uniformLocation("zoom");
+	timeUniform_ = program_->uniformLocation("time");
+	maxIterationsUniform_ = program_->uniformLocation("maxIterations");
 
 	// Release all
 	program_->release();
@@ -126,28 +171,16 @@ void Window::onRender()
 	// Clear buffers
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-	// Calculate MVP matrix
-	model_.setToIdentity();
-	model_.translate(0, 0, -2);
-	view_.setToIdentity();
-	const auto mvp = projection_ * view_ * model_;
-
 	// Bind VAO and shader program
 	program_->bind();
 	vao_.bind();
 
-	// Update uniform value
-	program_->setUniformValue(mvpUniform_, mvp);
-
-	// Activate texture unit and bind texture
-	glActiveTexture(GL_TEXTURE0);
-	texture_->bind();
+	updateUniform();
 
 	// Draw
-	glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, nullptr);
+	glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, nullptr);
 
 	// Release VAO and shader program
-	texture_->release();
 	vao_.release();
 	program_->release();
 
@@ -165,17 +198,128 @@ void Window::onResize(const size_t width, const size_t height)
 	// Configure viewport
 	glViewport(0, 0, static_cast<GLint>(width), static_cast<GLint>(height));
 
-	// Configure matrix
-	const auto aspect = static_cast<float>(width) / static_cast<float>(height);
-	const auto zNear = 0.1f;
-	const auto zFar = 100.0f;
-	const auto fov = 60.0f;
-	projection_.setToIdentity();
-	projection_.perspective(fov, aspect, zNear, zFar);
+	info.resolution = {static_cast<GLfloat>(width), static_cast<GLfloat>(height)};
+
+	// Update the uniform if program is created
+	if (program_ && program_->isLinked())
+	{
+		const auto guard = bindContext();
+		program_->bind();
+		updateUniform();
+		program_->release();
+	}
+}
+
+void Window::updateUniform()
+{
+	if (program_ && program_->isLinked())
+	{
+		// Upload individual uniform components
+		if (resolutionUniform_ != -1)
+		{
+			program_->setUniformValue(resolutionUniform_, info.resolution);
+		}
+
+		if (offsetUniform_ != -1)
+		{
+			program_->setUniformValue(offsetUniform_, info.offset);
+		}
+
+		if (zoomUniform_ != -1)
+		{
+			program_->setUniformValue(zoomUniform_, info.zoom);
+		}
+
+		if (timeUniform_ != -1)
+		{
+			GLfloat time = static_cast<float>(QDateTime::currentMSecsSinceEpoch() % (31415 * 2));
+			program_->setUniformValue(timeUniform_, time);
+		}
+
+		if (maxIterationsUniform_ != -1)
+		{
+			program_->setUniformValue(maxIterationsUniform_, info.maxIterations);
+		}
+	}
+}
+
+void Window::mousePressEvent(QMouseEvent * event)
+{
+	if (event->button() == Qt::LeftButton)
+	{
+		lastMousePos_ = event->pos();
+		isPanning_ = true;
+	}
+}
+
+void Window::mouseReleaseEvent(QMouseEvent * event)
+{
+	if (event->button() == Qt::LeftButton)
+	{
+		isPanning_ = false;
+	}
+}
+
+void Window::mouseMoveEvent(QMouseEvent * event)
+{
+	if (isPanning_ && (event->buttons() & Qt::LeftButton))
+	{
+		QPointF delta = event->pos() - lastMousePos_;
+		delta.ry() = -delta.y();
+		lastMousePos_ = event->pos();
+
+		// Calculate panning in Mandelbrot space
+		// Convert pixel delta to Mandelbrot space delta
+		// Adjust for aspect ratio and zoom
+		QPointF normalized = 2.0f * delta / (info.resolution.y() * info.zoom);
+		info.offset -= normalized;
+
+		update();// Request redraw
+	}
+}
+
+void Window::wheelEvent(QWheelEvent * event)
+{
+	// Get mouse position relative to window center
+	QPointF mousePos = event->position();
+
+	// Convert mouse position to normalized device coordinates [-1, 1]
+	float ndcX = (2.0f * mousePos.x() / info.resolution.x()) - 1.0f;
+	float ndcY = 1.0f - (2.0f * mousePos.y() / info.resolution.y());// Flip Y
+
+	float aspectRatio = info.resolution.x() / info.resolution.y();
+	ndcX *= aspectRatio;
+
+	QPointF ndc = {ndcX, ndcY};
+
+	// Get current position in Mandelbrot space at cursor
+	QPointF currentCursorPos = info.offset + ndc / info.zoom;
+
+	// Apply zoom
+	float zoomFactor = 1.25f;// Slower, more precise zoom
+	QPointF zoomDelta = event->angleDelta();
+
+	if (zoomDelta.y() > 0)
+	{
+		// Zoom in
+		info.zoom *= zoomFactor;
+	}
+	else if (zoomDelta.y() < 0)
+	{
+		// Zoom out
+		info.zoom /= zoomFactor;
+	}
+
+	// Calculate new offset to keep cursor position fixed
+	QPointF newCursorPos = info.offset + ndc / info.zoom;
+	QPointF delta = (currentCursorPos - newCursorPos);
+	info.offset += delta;
+
+	update();// Request redraw
 }
 
 Window::PerfomanceMetricsGuard::PerfomanceMetricsGuard(std::function<void()> callback)
-	: callback_{ std::move(callback) }
+	: callback_{std::move(callback)}
 {
 }
 
@@ -198,6 +342,5 @@ auto Window::captureMetrics() -> PerfomanceMetricsGuard
 				frameCount_ = 0;
 				emit updateUI();
 			}
-		}
-	};
+		}};
 }

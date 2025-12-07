@@ -3,14 +3,25 @@
 #include <Base/GLWidget.hpp>
 
 #include <QElapsedTimer>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QMatrix4x4>
 #include <QOpenGLBuffer>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLTexture>
 #include <QOpenGLVertexArrayObject>
+#include <QSlider>
+#include <QVBoxLayout>
 
 #include <functional>
 #include <memory>
+
+struct Info {
+	QPointF resolution;
+	QPointF offset;
+	GLfloat zoom;
+	GLint maxIterations = 100;
+};
 
 class Window final : public fgl::GLWidget
 {
@@ -19,10 +30,14 @@ public:
 	Window() noexcept;
 	~Window() override;
 
-public: // fgl::GLWidget
+public:// fgl::GLWidget
 	void onInit() override;
 	void onRender() override;
 	void onResize(size_t width, size_t height) override;
+	void mousePressEvent(QMouseEvent * event) override;
+	void mouseMoveEvent(QMouseEvent * event) override;
+	void mouseReleaseEvent(QMouseEvent * event) override;
+	void wheelEvent(QWheelEvent * event) override;
 
 private:
 	class PerfomanceMetricsGuard final
@@ -44,21 +59,34 @@ private:
 private:
 	[[nodiscard]] PerfomanceMetricsGuard captureMetrics();
 
+	void updateUniform();
+	void setupUI();
+	void onSliderChanged();
+
 signals:
 	void updateUI();
 
 private:
-	GLint mvpUniform_ = -1;
+	QPoint lastMousePos_;
+	bool isPanning_ = false;
+
+	GLint
+		resolutionUniform_ = -1,
+		offsetUniform_ = -1,
+		cursorUniform_ = -1,
+		zoomUniform_ = -1,
+		timeUniform_ = -1,
+		maxIterationsUniform_ = -1;
+
+	Info info;
+
+	QSlider * iterationsSlider_;
+	QLabel * iterationsLabel_;
 
 	QOpenGLBuffer vbo_{QOpenGLBuffer::Type::VertexBuffer};
 	QOpenGLBuffer ibo_{QOpenGLBuffer::Type::IndexBuffer};
 	QOpenGLVertexArrayObject vao_;
 
-	QMatrix4x4 model_;
-	QMatrix4x4 view_;
-	QMatrix4x4 projection_;
-
-	std::unique_ptr<QOpenGLTexture> texture_;
 	std::unique_ptr<QOpenGLShaderProgram> program_;
 
 	QElapsedTimer timer_;
